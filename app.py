@@ -7,6 +7,8 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 from flask import jsonify
+import base64
+from argon2 import PasswordHasher
 
 
 class Base(DeclarativeBase): 
@@ -21,6 +23,7 @@ class User(db.Model): #User class inherit Model class
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(unique=True)
     name: Mapped[str]
+    password: Mapped[str]
 
 @app.route("/user", methods=['GET','POST','PUT','DELETE'])
 def user():
@@ -98,8 +101,79 @@ def user():
             })
         return users, 200
         
+
+@app.post('/signup')
+def signup():
+    dataDict = request.get_json() # Mendapatkan data JSON dari request
+    name = dataDict["name"]
+    email = dataDict["email"]
+    password = dataDict["password"]
+    re_password = dataDict["re_password"]
+    
+    # Memeriksa apakah password sama dengan re_password
+    if password != re_password:
+        return {
+            "message" : "Password tidak sama!"
+        }, 400
+    
+    # Memeriksa apakah email terisi
+    if not email:
+        return {
+            "message" : "Email harus diisi"
+        }, 400
+        
+    # Menghash password menggunakan Argon2
+    
+    hashed_password = PasswordHasher().hash(password)
+    
+    # Membuat objek User dengan menggunakan properti yang sesuai
+    new_user = User(
+        email=email,
+        name=name,
+        password=hashed_password,  # Pastikan properti ini sesuai dengan definisi model
+    )
+    db.session.add(new_user)
+    db.session.commit()
+    
+    return {
+        "message" : "Successfully"
+    },201   
+        
     
 
+@app.post("/sigin")
+def sigin():
+    #catch the Authorization header
+    base64Str = request.headers.get('Authorization')
+    base64Str = base64Str[6:] # hapus "Basic" string
+    
+    #Mulai Base64 Decode
+    base64Bytes = base64Str.encode('ascii')
+    messageBytes = base64.b64decode(base64Bytes)
+    pair = messageBytes.decode('ascii')
+    #Akhir Base64 Decode
+    
+    email, password = pair.split(":")
+    
+    user = db.session.execute(
+        db.select(User)
+        .filter_by(email=email)
+        .scalar_one()
+    )
+    if not user or not ph.verify(user.password, password):
+        return {
+            "message": "wrong password or email!"
+        },400
+        
+    
+        
+    return {
+        "message" : pair
+        # "token_access" : "Login",
+    },200
+    
+    
+    
 # @app.route("/")
 # def hello_world():
 #     return {
