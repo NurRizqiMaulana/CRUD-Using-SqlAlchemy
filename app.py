@@ -8,7 +8,18 @@ from sqlalchemy import Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 from flask import jsonify
 import base64
+
 from argon2 import PasswordHasher
+
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
+
+from flask_jwt_extended import create_access_token
+from flask_jwt_extended import current_user
+from flask_jwt_extended import get_jwt_identity
+from flask_jwt_extended import jwt_required
+from flask_jwt_extended import JWTManager
 
 
 class Base(DeclarativeBase): 
@@ -19,13 +30,36 @@ app.config["SQLALCHEMY_DATABASE_URI"] = "mysql://root:@127.0.0.1/myflask"  #"mys
 db = SQLAlchemy(model_class=Base) # Instantiate SQLALchemy
 db.init_app(app)
 
+# Setup the Flask-JWT-Extended extension
+app.config["JWT_SECRET_KEY"] = "super-secret"  # Change this!
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=1)
+jwt = JWTManager(app)
+
 class User(db.Model): #User class inherit Model class
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(unique=True)
     name: Mapped[str]
     password: Mapped[str]
 
+class ApiKey(db.Model): #User class inherit Model class
+    api_key: Mapped[str] = mapped_column(primary_key=True)
+
+# @jwt.user_identity_loader
+# def user_identity_lookup(user):
+#     return user.id
+
+# @jwt.user_lookup_loader
+# def user_lookup_callback(_jwt_header, jwt_data):
+#     id = jwt_data["sub"]
+#     return User.query.filter_by(id=id).one_or_none()
+
+@jwt.user_lookup_loader
+def user_lookup_callback(_jwt_header, jwt_data):
+    identity = jwt_data["sub"]
+    return User.query.filter_by(id=identity).one_or_none()
+
 @app.route("/user", methods=['GET','POST','PUT','DELETE'])
+@jwt_required()
 def user():
     if request.method == 'POST':
         dataDict = request.get_json() #It return dictionary.
@@ -123,9 +157,7 @@ def signup():
         }, 400
         
     # Menghash password menggunakan Argon2
-    
     hashed_password = PasswordHasher().hash(password)
-    
     # Membuat objek User dengan menggunakan properti yang sesuai
     new_user = User(
         email=email,
@@ -158,22 +190,70 @@ def sigin():
     user = db.session.execute(
         db.select(User)
         .filter_by(email=email)
-        .scalar_one()
-    )
-    if not user or not ph.verify(user.password, password):
+    ).scalar_one()
+    if not user or not PasswordHasher().verify(user.password, password):
         return {
             "message": "wrong password or email!"
         },400
-        
+    #End Authentication    
     
-        
+    #Start Generate JWT Token
+    access_token = create_access_token(identity=user.id)
+    #End Generate JWT Token
     return {
-        "message" : pair
-        # "token_access" : "Login",
+        "token_access" : access_token,
     },200
     
+@app.post("/login")
+def login():
+    data = request.json
+    email = data.get('email')
+    password = data.get('password')
+    
+    if not email or not password:
+        return {
+            "message": "Email dan kata sandi diperlukan!"
+        }, 400
+    user = db.session.execute(
+        db.select(User)
+        .filter_by(email=email)
+    ).scalar_one() 
+    
+    if not user or not PasswordHasher().verify(user.password, password):
+        return {
+            "message": "Email atau kata sandi salah!"
+        }, 400
+    
+    # Autentikasi berhasil, generate token akses JWT
+    access_token = create_access_token(identity=user.id)
+    
+    return {
+        "token_access": access_token
+    }, 200
     
     
+    
+@app.get("/myprofile")
+@jwt_required()
+def profile():
+    current_user = get_jwt_identity()
+    
+    return {
+        "id" : current_user.id,
+        "email" : current_user.email,
+        "name" : current_user.name,
+        
+    }
+
+@app.get("/who")
+@jwt_required()
+def protected():
+    # We can now access our sqlalchemy User object via `current_user`.
+    return jsonify(
+        id=current_user.id,
+        email=current_user.email,
+        name=current_user.name,
+    )
 # @app.route("/")
 # def hello_world():
 #     return {
